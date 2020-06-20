@@ -3,7 +3,6 @@ websocket 简易聊天室
 
 gcc -o ws ws.c
 
-https://www.cnblogs.com/imayi/archive/2012/05/05/2485343.html
 
 
 GET / HTTP/1.1
