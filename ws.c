@@ -1,9 +1,7 @@
 /*
 websocket 简易聊天室
 
-gcc -o ws ws.c
-
-
+gcc -o ws ws.c ./crypto/sha1.c ./crypto/base64_encoder.c
 
 GET / HTTP/1.1
 Origin: null
@@ -63,15 +61,17 @@ Payload len长度，[0,125]后续(判断是否有MASK掩码处理)直接接数�
 
 const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+#define IP "172.16.0.4"
+
 //客户端结构体
 typedef struct session {
-	int fd;
-	int is_shake_hand;				// 是否已经握手
-	unsigned char* data;			// 读取数据的buf
-	unsigned char sha1_data[256];
-	int sha1_size;
-
-	struct session * next;
+	int 				fd;				
+	char 				addr[64];
+	int 				is_shake_hand;	// 是否已经握手
+	unsigned char * 	data;			// 读取数据的buf
+	unsigned char 		sha1_data[256];
+	int 				sha1_size;
+	struct session * 	next;
 }session;
 
 //不带头的单链表
@@ -79,12 +79,14 @@ session * client_list = NULL;
 session * tail = NULL;
 
 
-int tcp_socket(int port);
+static int tcp_socket(int port);
 static int sp_add(int efd, int sock, void *ud);
 
 static void ws_send_data(int fd,unsigned char* data, int len);
-static void ws_on_recv_data(int fd,unsigned char* data, unsigned int len);
+static void ws_on_recv_data(session *s,int fd,unsigned char* data, unsigned int len);
 
+void handle_accept(int lfd,int efd);
+void handle_recv(session *s,int efd);
 
 int main(int argc,char *argv[])
 {
@@ -105,12 +107,6 @@ int main(int argc,char *argv[])
 
 	struct epoll_event event[1024];
 
-	struct sockaddr_in cli_addr;
-	bzero(&cli_addr,sizeof(cli_addr));
-	socklen_t len = sizeof(cli_addr);
-
-	int ret;
-	unsigned char tmp[64];
 	for(;;)
 	{   
 		int r = epoll_wait(efd, event, 1024, -1);
@@ -121,127 +117,11 @@ int main(int argc,char *argv[])
 
 			if(fd == lfd && event[i].events & EPOLLIN)
 			{
-				int cfd = accept(lfd,(struct sockaddr*)&cli_addr,&len);
-				assert(cfd > 0);
-
-				session *ns = malloc(sizeof(*ns));// session;
-				ns->is_shake_hand = 0;
-				ns->fd = cfd;
-				ns->data = malloc(1024);
-				ns->next = NULL;
-
-				if(client_list == NULL)
-				{
-					client_list = ns;
-					tail = ns;
-				}
-				else
-				{
-					tail->next = ns;
-					tail = ns;
-				}
-
-				sp_add(efd, cfd, (void*)ns);
-
-				printf("new client fd = %d from %s:%d\n",cfd,inet_ntoa(cli_addr.sin_addr),ntohs(cli_addr.sin_port));
+				handle_accept(lfd, efd);
 			}
 			else if(event[i].events & EPOLLIN)
 			{
-				ret = recv(fd, s->data, 1024,0);
-				if(ret > 0 )
-				{   
-					//printf("recv %d %s\n",ret,s->data);
-					s->data[ret] = '\0';
-
-					if(s->is_shake_hand == 0)
-					{
-						printf("%s\n",s->data);
-						s->is_shake_hand = 1;
-						char *p = strstr(s->data,"Sec-WebSocket-Key:");
-						char key[256] = {0};
-						if(p)
-						{
-							//get key
-							char *end = strstr(s->data,"==");
-							memcpy(key,p + strlen("Sec-WebSocket-Key: "),end + 2 - p - strlen("Sec-WebSocket-Key: "));
-							//printf("get:%s\n",key);
-						}
-						else
-						{
-							fprintf(stderr,"no Sec-WebSocket-Key");
-						}
-						//+GUID
-						strcat(key,GUID);
-
-						//+sha
-						crypt_sha1(key,strlen(key),s->sha1_data,&s->sha1_size);
-
-						//+base64
-						int encode_sz;
-						char *res = base64_encode(s->sha1_data, s->sha1_size, &encode_sz);
-						char head[1024] = {0};
-
-						sprintf(head,
-							"HTTP/1.1 101 Switching Protocols\r\n"\
-							"Upgrade:websocket\r\n"\
-							"Connection: Upgrade\r\n"\
-							"Sec-WebSocket-Accept: %s\r\n\r\n",
-							res);
-
-						printf("%s\n",head);
-						send(fd, head, strlen(head), 0);
-
-						
-						sprintf(tmp,"你的编号是 %d",fd);
-						ws_send_data(fd, (unsigned char*) tmp, strlen(tmp));
-
-						for(session * it = client_list; it!=NULL; it = it->next)
-						{
-							if(it->fd != fd)
-							{
-								sprintf(tmp,"client %d 加入了群聊",fd);
-								ws_send_data(it->fd,(unsigned char*)tmp,strlen(tmp));
-							}
-						}
-					}
-					else
-					{
-						//printf("data\n");
-						ws_on_recv_data(fd,s->data,ret);
-					}
-				}
-				else if(ret <= 0)
-				{
-					epoll_ctl(efd,EPOLL_CTL_DEL,fd,NULL); 
-					close(fd);
-					printf("closed client fd:%d\n",fd);
-
-					if(client_list->fd == fd)
-					{
-						session* p = client_list;
-						client_list = client_list->next;
-						free(p);
-					}
-					else
-					{
-						for(session * it = client_list; it->next!=NULL; it = it->next)
-						{
-							if(it->next->fd == fd)
-							{
-								session* p = it->next;
-								it->next = p->next;
-								free(p);
-								break;
-							}
-						}
-					}
-					for(session * it = client_list; it != NULL; it = it->next)
-					{
-						char tmp[64];
-						sprintf(tmp,"client %d 离开了群聊",fd);
-						ws_send_data(it->fd, (unsigned char*)tmp, strlen(tmp));
-					}	
-				}
+				handle_recv(s, efd);
 			}
 		}
 	}
@@ -251,8 +131,138 @@ int main(int argc,char *argv[])
 }
 
 
+
+void handle_accept(int lfd,int efd)
+{
+	struct sockaddr_in cli_addr;
+	bzero(&cli_addr,sizeof(cli_addr));
+	socklen_t len = sizeof(cli_addr);
+
+	int cfd = accept(lfd,(struct sockaddr*)&cli_addr,&len);
+	assert(cfd > 0);
+
+	session *ns = malloc(sizeof(*ns));// session;
+	ns->is_shake_hand = 0;
+	ns->fd = cfd;
+	ns->data = malloc(1024);
+	ns->next = NULL;
+	sprintf(ns->addr,"%s:%d",inet_ntoa(cli_addr.sin_addr),ntohs(cli_addr.sin_port));
+
+	if(client_list == NULL)
+	{
+		client_list = ns;
+		tail = ns;
+	}
+	else
+	{
+		tail->next = ns;
+		tail = ns;
+	}
+	sp_add(efd, cfd, (void*)ns);
+	printf("new client fd = %d from %s:%d\n",
+		cfd,inet_ntoa(cli_addr.sin_addr),ntohs(cli_addr.sin_port));
+}
+void handle_recv(session *s,int efd){
+	int fd = s->fd;
+	unsigned char tmp[64];
+	int ret = recv(fd, s->data, 1024,0);
+	if(ret > 0 )
+	{   
+		//printf("recv %d %s\n",ret,s->data);
+		s->data[ret] = '\0';
+
+		if(s->is_shake_hand == 0)
+		{
+			printf("%s\n",s->data);
+			s->is_shake_hand = 1;
+			char *p = strstr(s->data,"Sec-WebSocket-Key:");
+			char key[256] = {0};
+			if(p)
+			{
+				//get key
+				char *end = strstr(s->data,"==");
+				memcpy(key,p + strlen("Sec-WebSocket-Key: "),end + 2 - p - strlen("Sec-WebSocket-Key: "));
+				//printf("get:%s\n",key);
+			}
+			else
+			{
+				fprintf(stderr,"no Sec-WebSocket-Key");
+			}
+			//+GUID
+			strcat(key,GUID);
+
+			//+sha1
+			crypt_sha1(key,strlen(key),s->sha1_data,&s->sha1_size);
+
+			//+base64
+			int encode_sz;
+			char *res = base64_encode(s->sha1_data, s->sha1_size, &encode_sz);
+			char head[1024] = {0};
+
+			sprintf(head,
+				"HTTP/1.1 101 Switching Protocols\r\n"\
+				"Upgrade:websocket\r\n"\
+				"Connection: Upgrade\r\n"\
+				"Sec-WebSocket-Accept: %s\r\n\r\n",
+				res);
+
+			printf("%s\n",head);
+			send(fd, head, strlen(head), 0);
+
+
+			sprintf(tmp,"%s 握手成功",s->addr);
+			ws_send_data(fd, (unsigned char*) tmp, strlen(tmp));
+
+			for(session * it = client_list; it!=NULL; it = it->next)
+			{
+				if(it->fd != fd)
+				{
+					sprintf(tmp,"%s 加入了群聊", s->addr);
+					ws_send_data(it->fd,(unsigned char*)tmp,strlen(tmp));
+				}
+			}
+		}
+		else
+		{
+			//printf("data\n");
+			ws_on_recv_data(s,fd,s->data,ret);
+		}
+	}
+	else if(ret <= 0)
+	{
+		epoll_ctl(efd,EPOLL_CTL_DEL,fd,NULL); 
+		close(fd);
+		printf("closed client fd:%d\n",fd);
+
+		if(client_list->fd == fd)
+		{
+			session* p = client_list;
+			client_list = client_list->next;
+			free(p);
+		}
+		else
+		{
+			for(session * it = client_list; it->next!=NULL; it = it->next)
+			{
+				if(it->next->fd == fd)
+				{
+					session* p = it->next;
+					it->next = p->next;
+					free(p);
+					break;
+				}
+			}
+		}
+		for(session * it = client_list; it != NULL; it = it->next)
+		{
+			sprintf(tmp,"%s 离开了群聊",s->addr);
+			ws_send_data(it->fd, (unsigned char*)tmp, strlen(tmp));
+		}	
+	}
+}
+
 // 收到的是一个数据包;
-static void ws_on_recv_data(int fd,unsigned char* data, unsigned int len) {
+static void ws_on_recv_data(session *s,int fd,unsigned char* data, unsigned int len) {
 	/*
 	判断是否是最后一个包
 	第一个字节  [0,7]，第一位是FIN，1000 ，文本类型0001/ 二进制类型0002
@@ -263,8 +273,8 @@ static void ws_on_recv_data(int fd,unsigned char* data, unsigned int len) {
 		return;
 	}
 	/*
-	  8(MASK) 9 0 1 2 3 4 5(Payload len (7))
-	  & 0111 1111
+	8(MASK) 9 0 1 2 3 4 5(Payload len (7))
+	& 0111 1111
 	*/
 
 	//Masking-key, if MASK set to 1
@@ -288,7 +298,7 @@ static void ws_on_recv_data(int fd,unsigned char* data, unsigned int len) {
 		head_size += 8;
 	}
 
-	
+
 	unsigned char* body = data + head_size;
 
 	if(flag_mask == 128){
@@ -299,7 +309,7 @@ static void ws_on_recv_data(int fd,unsigned char* data, unsigned int len) {
 			body[i] = body[i] ^ mask[i % 4];
 		}
 	}
-	
+
 
 	// test
 	static char test_buf[4096];
@@ -316,7 +326,7 @@ static void ws_on_recv_data(int fd,unsigned char* data, unsigned int len) {
 		{	
 			printf("广播给 %d\n",it->fd);
 			unsigned char tmp[1024];
-			sprintf(tmp,"client %d : %s",fd,test_buf);
+			sprintf(tmp,"%s : %s",s->addr, test_buf);
 			ws_send_data(it->fd,(unsigned char*)tmp,strlen(tmp));
 		}
 	}
@@ -359,15 +369,15 @@ static int sp_add(int efd, int sock, void *ud) {
 	return 0;
 }
 
-int tcp_socket(int port){
+static int tcp_socket(int port){
 	int sock;
 	struct sockaddr_in addr;
 	memset(&addr,0,sizeof addr);
-	addr.sin_family=AF_INET;
-	addr.sin_addr.s_addr=inet_addr("172.16.0.4");//htonl(INADDR_ANY);
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = inet_addr(IP);//htonl(INADDR_ANY);
 	addr.sin_port=htons(port);
 
-	sock=socket(AF_INET,SOCK_STREAM,0);
+	sock = socket(AF_INET,SOCK_STREAM,0);
 	const int on=1;
 	if (setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,&on,sizeof on))
 	{
