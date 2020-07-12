@@ -1,5 +1,4 @@
 //gcc -o httpd httpd.c ./crypto/sha1.c ./crypto/base64_encoder.c ./http_parser/http_parser.c
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -30,24 +29,29 @@ const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 			 "Accept-Ranges:bytes\r\n" \
 			 "Content-Length:%d\r\n\r\n"
 
+#define WS_HEAD "HTTP/1.1 101 Switching Protocols\r\n"\
+			"Upgrade:websocket\r\n"\
+			"Connection: Upgrade\r\n"\
+			"Sec-WebSocket-Accept: %s\r\n\r\n"
+
 
 //客户端结构体  有的是http请求，有的是websocket连接
 typedef struct session {
 	int 			fd;				
 	char 			addr[64];
 	int 			is_shake_hand;	// 是否是websocket连接,是否已经握手
-	char 			* 	data;			// 读取数据的buf
+	char 			*data;		// 读取数据的buf
 	uint8_t 		sha1_data[256];
 	int 			sha1_size;
 
-	struct session * 	next;
+	struct session  *next;
 }session;
 
 //不带头的单链表
 session * client_list = NULL;
 session * tail = NULL;
 
-static char url_buf[1024];//保存GET 内容
+static char url_buf[16];//保存GET 内容
 
 static int on_url(http_parser*p, const char *at, size_t length) {
 	strncpy(url_buf, at, length);
@@ -60,15 +64,19 @@ static http_parser_settings settings = {
 };
 static http_parser parser;
 
+char LOGBUF[1024];
 void save_log(char *buf);
+
+
 const char *get_filetype(const char *filename); //根据扩展名返回文件类型描述
 int get_file_content(const char *file_name, char **content);
 int make_http_content(const char *command, char **content);
-char LOGBUF[1024];
+
 
 static int tcp_socket(int port);
 static int sp_add(int efd, int sock, void *ud);
 
+//处理websocket
 static void handle_ws(session *s);
 static void ws_send_data(int fd,char* data, int len);
 static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len);
@@ -76,6 +84,7 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len);
 void handle_accept(int lfd,int efd);
 void handle_recv(session *s,int efd);
 void daemon_run();
+
 int main(int argc,char *argv[])
 {
 	if(argc != 2)
@@ -85,7 +94,7 @@ int main(int argc,char *argv[])
 	}
 	daemon_run();
 	signal(SIGPIPE, SIG_IGN);
-	signal(SIGINT, SIG_IGN);
+	//signal(SIGINT, SIG_IGN);
 	signal(SIGHUP, SIG_IGN);
 
     http_parser_init(&parser, HTTP_REQUEST);
@@ -134,10 +143,10 @@ void handle_accept(int lfd,int efd)
 	int cfd = accept(lfd,(struct sockaddr*)&cli_addr,&len);
 	assert(cfd > 0);
 
-	session *ns = malloc(sizeof(*ns));// session;
+	session *ns = malloc(sizeof(*ns));
 	ns->is_shake_hand = 0;
 	ns->fd = cfd;
-	ns->data = (char*)malloc(SIZE);//new char[SIZE];
+	ns->data = (char*)malloc(SIZE);
 	ns->next = NULL;
 	sprintf(ns->addr,"%s:%d",inet_ntoa(cli_addr.sin_addr),ntohs(cli_addr.sin_port));
 
@@ -164,10 +173,9 @@ void handle_accept(int lfd,int efd)
 void handle_recv(session *s,int efd){
 	int fd = s->fd;
 	char tmp[64];
-	char head[128];
 	memset(s->data,0,1024);
 	int ret = recv(fd, s->data, 1024,0);
-	if(ret > 0 )
+	if(ret > 0)
 	{   
 		s->data[ret] = '\0';
 		printf("recv from:%d ,msg_len = %d\n",fd,ret);
@@ -187,7 +195,7 @@ void handle_recv(session *s,int efd){
 				return;
 			}
             printf("client %d %s http req\n",fd,s->addr);
-			//printf("%s\n",s->data);
+			printf("%s\n",s->data);
 
             //解析出GET 内容
 			http_parser_execute(&parser, &settings, s->data, strlen(s->data));
@@ -214,8 +222,6 @@ void handle_recv(session *s,int efd){
 		sprintf(LOGBUF,"%s close\n",s->addr);
 		save_log(LOGBUF);
 
-        char addr[64];
-        sprintf(addr,"%s",s->addr);
         int flag = s->is_shake_hand;
 
         if(client_list->fd == fd)
@@ -257,48 +263,109 @@ void handle_recv(session *s,int efd){
 	}
 }
 
+static void handle_ws(session *s){
+	char tmp[64];
+	//未握手
+	if(s->is_shake_hand == 0)
+	{
+		printf("%s\n",s->data);
+		s->is_shake_hand = 1;
+		char *p = strstr(s->data,"Sec-WebSocket-Key:");
+		uint8_t key[256] = {0};
+		if(p)
+		{
+			//get key
+			char *end = strstr(s->data,"==");
+			memcpy(key,p + strlen("Sec-WebSocket-Key: "),end + 2 - p - strlen("Sec-WebSocket-Key: "));
+			//printf("get:%s\n",key);
+		}
+		else
+		{
+			fprintf(stderr,"no Sec-WebSocket-Key");
+		}
+		//+GUID
+		strcat((char*)key,GUID);
+
+		//+sha1
+		crypt_sha1((uint8_t*)key,strlen((char*)key),s->sha1_data,&s->sha1_size);
+
+		//+base64
+		int encode_sz;
+		char *res = base64_encode(s->sha1_data, s->sha1_size, &encode_sz);
+		char head[1024] = {0};
+
+		sprintf(head,WS_HEAD,res);
+
+		printf("%s\n",head);
+		send(s->fd, head, strlen(head), 0);
+
+
+		sprintf(tmp,"client %d websocket握手成功",s->fd);
+		//printf("%s\n",tmp);
+
+		memset(LOGBUF,0,sizeof(LOGBUF));
+		sprintf(LOGBUF,"%s\n",tmp);
+		save_log(LOGBUF);
+
+
+		ws_send_data(s->fd, tmp, strlen(tmp));
+
+        for(session * it = client_list; it!=NULL; it = it->next)
+		{
+			if(it->fd != s->fd && it->is_shake_hand == 1)
+			{
+				sprintf(tmp,"client %d 加入了群聊", s->fd);
+				ws_send_data(it->fd,tmp,strlen(tmp));
+			}
+		}
+	}
+	else{
+		ws_on_recv_data(s,s->fd,s->data,strlen(s->data));
+	}
+}
+
 // 收到的是一个数据包;
 static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	printf("ws_on_recv_data\n");
 	/*
 	判断是否是最后一个包
 	第一个字节  [0,7]，第一位是FIN，1000 ，文本类型0001/ 二进制类型0002
-	0x81  0x82
+	1000 0001B  0x81H  
+	1000 0010B  0x82H
 	*/
 	if (data[0] != 0xffffff81 && data[0] != 0xffffff82) {
 		printf("data[0] != 0xffffff81 && data[0] != 0xffffff82\n");
 		return;
 	}
-	/*
-	8(MASK) 9 0 1 2 3 4 5(Payload len (7))
-	& 0111 1111
-	*/
 
-	//Masking-key, if MASK set to 1
-	//判断MASK位是否为1
-	unsigned int flag_mask = data[1] & 0x80;//1000 0000
-	//printf("flag_mask %d\n",flag_mask);
-
-	unsigned int data_len = data[1] & 0x7f;
+	unsigned int flag_mask = data[1] & 0x80;//Masking-key 1000 0000B
+	unsigned int data_len = data[1] & 0x7f; //Payload len (7) 0111 1111B
 	int head_size = 2;
-	printf("ws data_len: %u\n",data_len);
+	printf("flag_mask %u, ws data_len: %u\n",flag_mask,data_len);
 
-	if (data_len == 126) { // 后面两个字节表示的是数据长度;data[2], data[3]
-		data_len = data[3] | (data[2] << 8);
+    // 后面两个字节表示的是数据长度;data[2](存储高位), data[3],最大65535
+	if (data_len == 126) { 
+		//data_len = data[3] | (data[2] << 8);
+		data_len = data[2]*256 + data[3];
+		printf("126, data_len: %u\n",data_len);
 		head_size += 2;
 	}
-	else if (data_len == 127) { // 后面8个字节表示数据长度; 2, 3, 4, 5 | 6, 7, 8, 9
-		unsigned int low = data[5] | (data[4] << 8) | (data[3] << 16) | (data[2] << 24);
-		unsigned int hight = data[9] | (data[8] << 8) | (data[7] << 16) | (data[6] << 24);
-
-		data_len = low;
-		head_size += 8;
+	// 后面8个字节表示数据长度; 2, 3, 4, 5 | 6, 7, 8, 9
+	//太大，不考虑
+	else if (data_len == 127) { 
+		//unsigned int low = data[5] | (data[4] << 8) | (data[3] << 16) | (data[2] << 24);
+		//unsigned int hight = data[9] | (data[8] << 8) | (data[7] << 16) | (data[6] << 24);
+		//printf("127, low: %u  low: %u\n",low,hight);
+		//data_len = low;
+		//head_size += 8;
+		return;
 	}
 
 
 	char* body = data + head_size;
 
-	if(flag_mask == 128){
+	//是否有mask掩码
+	if(flag_mask == 0x80){
 		char* mask = data + head_size;
 		body += 4;
 
@@ -307,8 +374,11 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 		}
 	}
 
+	//包太大，不处理
+	if(data_len > 4096){
+		return;
+	}
 
-	// test
 	static char test_buf[4096];
 	memcpy(test_buf, body, data_len);
 	test_buf[data_len] = '\0';
@@ -323,30 +393,34 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	{
 		if(it->fd != fd && it->is_shake_hand == 1)
 		{	
-			printf("广播给 %d\n",it->fd);
+			//printf("广播给 %d\n",it->fd);
 			char tmp[1024];
 			sprintf(tmp,"client %d : %s",s->fd, test_buf);
 			ws_send_data(it->fd,tmp,strlen(tmp));
 		}
 	}
 }
+
 static void ws_send_data(int fd,char* data, int len) {
 	int head_size = 2;
+	//126
 	if (len > 125 && len < 65536) { // 两个字节[0, 65535]
 		head_size += 2;
 	}
+	//127
 	else if (len >= 65536) { // 不做处理
-		head_size += 8;
+		//head_size += 8;
+		return;
 	}
 
 	unsigned char* data_buf = (unsigned char*)malloc(head_size + len);
-	data_buf[0] = 0x81;	//1000 0001
+	data_buf[0] = 0x81;	//1000 0001B
 	if (len <= 125) {
 		data_buf[1] = len;//不考虑mask
 	}
-	else if (len > 125 && len < 65536) {
+	else if (len > 125 && len < 65536) {//126
 		data_buf[1] = 126;
-		data_buf[2] = (len & 0x0000ff00) >> 8;
+		data_buf[2] = (len & 0x0000ff00) >> 8;//高位，右移8位
 		data_buf[3] = (len & 0x000000ff);
 	}
 	else { // 127不写了
@@ -363,12 +437,10 @@ static void ws_send_data(int fd,char* data, int len) {
 //根据用户在GET中的请求，生成相应的回复内容
 int make_http_content(const char *command, char **content)
 {
-	//printf("make_http_content\n");
 	char *file_buf;
 	int file_length;
 	char headbuf[256];
 	memset(headbuf, 0, sizeof(headbuf));
-	//printf("strlen(command) %d\n",strlen(command));
 
 	if (command[0] == '/' && strlen(command) == 1)
 	{
@@ -396,72 +468,6 @@ int make_http_content(const char *command, char **content)
 }
 
 
-static void handle_ws(session *s){
-	char tmp[64];
-	//未握手
-	if(s->is_shake_hand == 0)
-	{
-		//printf("%s\n",s->data);
-		s->is_shake_hand = 1;
-		char *p = strstr(s->data,"Sec-WebSocket-Key:");
-		uint8_t key[256] = {0};
-		if(p)
-		{
-			//get key
-			char *end = strstr(s->data,"==");
-			memcpy(key,p + strlen("Sec-WebSocket-Key: "),end + 2 - p - strlen("Sec-WebSocket-Key: "));
-			//printf("get:%s\n",key);
-		}
-		else
-		{
-			fprintf(stderr,"no Sec-WebSocket-Key");
-		}
-		//+GUID
-		strcat((char*)key,GUID);
-
-		//+sha1
-		crypt_sha1((uint8_t*)key,strlen((char*)key),s->sha1_data,&s->sha1_size);
-
-		//+base64
-		int encode_sz;
-		char *res = base64_encode(s->sha1_data, s->sha1_size, &encode_sz);
-		char head[1024] = {0};
-
-		sprintf(head,
-			"HTTP/1.1 101 Switching Protocols\r\n"\
-			"Upgrade:websocket\r\n"\
-			"Connection: Upgrade\r\n"\
-			"Sec-WebSocket-Accept: %s\r\n\r\n",
-			res);
-
-		//printf("%s\n",head);
-		send(s->fd, head, strlen(head), 0);
-
-
-		sprintf(tmp,"client %d websocket握手成功",s->fd);
-		//printf("%s\n",tmp);
-
-		memset(LOGBUF,0,sizeof(LOGBUF));
-		sprintf(LOGBUF,"%s\n",tmp);
-		save_log(LOGBUF);
-
-
-		ws_send_data(s->fd, tmp, strlen(tmp));
-
-        for(session * it = client_list; it!=NULL; it = it->next)
-		{
-			if(it->fd != s->fd && it->is_shake_hand == 1)
-			{
-				sprintf(tmp,"client %d 加入了群聊", s->fd);
-				ws_send_data(it->fd,tmp,strlen(tmp));
-			}
-		}
-	}
-	else{
-
-		ws_on_recv_data(s,s->fd,s->data,strlen(s->data));
-	}
-}
 
 
 void save_log(char *buf)
@@ -473,7 +479,6 @@ void save_log(char *buf)
 
 const char *get_filetype(const char *filename) //根据扩展名返回文件类型描述
 {
-	////////////得到文件扩展名///////////////////
 	char sExt[32];
 	const char *p_start=filename;
 	memset(sExt, 0, sizeof(sExt));
@@ -588,8 +593,7 @@ int get_file_content(const char *file_name, char **content) // 得到文件内�
 		save_log(LOGBUF);
 		return 0;
 	}
-	//printf("file length %d\n",file_length);
-	//assert(file_length < 1024);
+
 	fread(*content, file_length, 1, fp);
 	fclose(fp);
 	return file_length;
