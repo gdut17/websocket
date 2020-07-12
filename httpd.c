@@ -51,9 +51,12 @@ typedef struct session {
 session * client_list = NULL;
 session * tail = NULL;
 
-static char url_buf[16];//保存GET 内容
+static char url_buf[16] = {0};//保存GET 内容
 
 static int on_url(http_parser*p, const char *at, size_t length) {
+	//printf("length:%d\n",length);
+	if(length > sizeof(url_buf))
+		return 0;
 	strncpy(url_buf, at, length);
 	url_buf[length] = '\0';
 	return 0;
@@ -200,11 +203,11 @@ void handle_recv(session *s,int efd){
                         //解析出GET 内容
 			http_parser_execute(&parser, &settings, s->data, strlen(s->data));
                         //printf("GET:%s\n",url_buf);
-                        char *content = NULL;
+            char *content = NULL;
 			int ilen = make_http_content(url_buf, &content); //根据用户在GET中的请求，生成相应的回复内容
 			if (ilen > 0)
 			{
-				//printf("%s\n",content);
+				printf("ilen %d\n",ilen);
 				send(fd, content, ilen, 0); //将回复的内容发送给client端socket
                                 free(content);
 			}
@@ -441,7 +444,9 @@ int make_http_content(const char *command, char **content)
 	int file_length;
 	char headbuf[256];
 	memset(headbuf, 0, sizeof(headbuf));
-
+	if(strlen(command) == 0){
+		return 0;
+	}
 	if (command[0] == '/' && strlen(command) == 1)
 	{
 		file_length = get_file_content("/index.html", &file_buf);
@@ -571,7 +576,7 @@ int get_file_content(const char *file_name, char **content) // 得到文件内�
 
 	if (fp == NULL)
 	{
-		printf("fp == null\n");
+		printf("fp == null %s \n",fl);
 		memset(LOGBUF,0,sizeof(LOGBUF));
 		sprintf(LOGBUF,"file name: %s,%s,%d:open file failture %s \n",file_name, __FILE__, __LINE__,
 			strerror(errno));
