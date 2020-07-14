@@ -23,28 +23,30 @@
 const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 #define HEAD "HTTP/1.0 200 OK\r\n" \
-			 "Content-Type: %s; charset=utf-8\r\n" \
-			 "Transfer-Encoding: chunked\r\n" \
-			 "Connection: Keep-Alive\r\n" \
-			 "Accept-Ranges:bytes\r\n" \
-			 "Content-Length:%d\r\n\r\n"
+	"Content-Type: %s; charset=utf-8\r\n" \
+	"Transfer-Encoding: chunked\r\n" \
+	"Connection: Keep-Alive\r\n" \
+	"Accept-Ranges:bytes\r\n" \
+	"Content-Length:%d\r\n\r\n"
 
 #define WS_HEAD "HTTP/1.1 101 Switching Protocols\r\n"\
-			"Upgrade:websocket\r\n"\
-			"Connection: Upgrade\r\n"\
-			"Sec-WebSocket-Accept: %s\r\n\r\n"
+	"Upgrade:websocket\r\n"\
+	"Connection: Upgrade\r\n"\
+	"Sec-WebSocket-Accept: %s\r\n\r\n"
 
 
 //客户端结构体  有的是http请求，有的是websocket连接
 typedef struct session {
-	int 			fd;				
-	char 			addr[64];
-	int 			is_shake_hand;	// 是否是websocket连接,是否已经握手
-	char 			*data;		// 读取数据的buf
-	uint8_t 		sha1_data[256];
-	int 			sha1_size;
+	int				fd;	
+	char			user_name[64];	
+	int				is_name;
+	char			addr[64];
+	int				is_shake_hand;	// 是否是websocket连接,是否已经握手
+	char			*data;		// 读取数据的buf
+	uint8_t			sha1_data[256];
+	int				sha1_size;
 
-	struct session  *next;
+	struct session	*next;
 }session;
 
 //不带头的单链表
@@ -97,7 +99,7 @@ int main(int argc,char *argv[])
 	//signal(SIGINT, SIG_IGN);
 	signal(SIGHUP, SIG_IGN);
 
-    	http_parser_init(&parser, HTTP_REQUEST);
+	http_parser_init(&parser, HTTP_REQUEST);
 	int port = atoi(argv[1]);
 	int lfd = tcp_socket(port);
 	assert(lfd > 0);
@@ -112,7 +114,7 @@ int main(int argc,char *argv[])
 
 	//epoll 同步io 阻塞
 	for(;;)
-	{   
+	{	
 		int r = epoll_wait(efd, event, 1024, -1);
 		for(int i = 0; i < r; i++)
 		{
@@ -147,7 +149,9 @@ void handle_accept(int lfd,int efd)
 	ns->is_shake_hand = 0;
 	ns->fd = cfd;
 	ns->data = (char*)malloc(SIZE);
+	ns->is_name = 0;
 	ns->next = NULL;
+	memset(ns->user_name,0,sizeof(ns->user_name));
 	sprintf(ns->addr,"%s:%d",inet_ntoa(cli_addr.sin_addr),ntohs(cli_addr.sin_port));
 
 	if(client_list == NULL)
@@ -172,18 +176,18 @@ void handle_accept(int lfd,int efd)
 
 void handle_recv(session *s,int efd){
 	int fd = s->fd;
-	char tmp[64];
+	
 	memset(s->data,0,1024);
 	int ret = recv(fd, s->data, 1024,0);
 	if(ret > 0)
-	{   
+	{	
 		s->data[ret] = '\0';
 		printf("recv from:%d ,msg_len = %d\n",fd,ret);
 
 		if(strstr(s->data,"websocket") || s->data[0] == 0xffffff81 || s->data[0] == 0xffffff82)
 		{
 			printf("client %d %s websocket req\n",fd,s->addr);
-			
+
 			handle_ws(s);
 		}
 		else
@@ -194,19 +198,19 @@ void handle_recv(session *s,int efd){
 				printf("%x %d strlen() < 50\n",s->data[0],fd);
 				return;
 			}
-            		printf("client %d %s http req\n",fd,s->addr);
+			printf("client %d %s http req\n",fd,s->addr);
 			printf("%s\n",s->data);
 
-            		//解析出GET 内容
+			//解析出GET 内容
 			http_parser_execute(&parser, &settings, s->data, strlen(s->data));
-            		//printf("GET:%s\n",url_buf);
-            		char *content = NULL;
+			//printf("GET:%s\n",url_buf);
+			char *content = NULL;
 			int ilen = make_http_content(url_buf, &content); //根据用户在GET中的请求，生成相应的回复内容
 			if (ilen > 0)
 			{
 				//printf("%s\n",content);
 				send(fd, content, ilen, 0); //将回复的内容发送给client端socket
-                		free(content);
+				free(content);
 			}
 			else
 			{
@@ -216,22 +220,26 @@ void handle_recv(session *s,int efd){
 	}
 	else if(ret <= 0)
 	{
+		char tmp[64];
+		sprintf(tmp,"client %d name:%s 离开了群聊",fd,s->user_name);
+
+
 		epoll_ctl(efd,EPOLL_CTL_DEL,fd,NULL); 
 		close(fd);
 
-        	memset(LOGBUF,0,sizeof(LOGBUF));
+		memset(LOGBUF,0,sizeof(LOGBUF));
 		sprintf(LOGBUF,"%s close\n",s->addr);
 		save_log(LOGBUF);
 
-        	int flag = s->is_shake_hand;
+		int flag = s->is_shake_hand;
 
-        	if(client_list->fd == fd)
+		if(client_list->fd == fd)
 		{
 			session* p = client_list;
-            		printf("closed client fd:%d %s\n",fd,p->addr);
+			printf("closed client fd:%d %s\n",fd,p->addr);
 
 			client_list = p->next;
-            		free(p->data);
+			free(p->data);
 			free(p);
 		}
 		else
@@ -241,42 +249,40 @@ void handle_recv(session *s,int efd){
 				if(it->next->fd == fd)
 				{
 					session* p = it->next;
-                    			printf("closed client fd:%d %s\n",fd,p->addr);
+					printf("closed client fd:%d %s\n",fd,p->addr);
 					it->next = p->next;
 					free(p->data);
-			        	free(p);
+					free(p);
 					break;
 				}
 			}
 		}
-        //加入了聊天室的人退出了才能广播
-        if(flag == 1)
-        {
-		sprintf(tmp,"client %d 离开了群聊",fd);
-		
-		json_t* root = json_new_object(); // {}
-		json_t* number = json_new_number("101"); // 
-		json_insert_pair_into_object(root, "msg_id", number); // {uid: 123,}
+		//加入了聊天室的人退出了才能广播
+		if(flag == 1)
+		{
+			json_t* root = json_new_object(); // {}
+			json_t* number = json_new_number("101"); // 
+			json_insert_pair_into_object(root, "msg_id", number); // {uid: 123,}
 
-		json_t* str = json_new_string(tmp);
-		json_insert_pair_into_object(root, "data", str);
+			json_t* str = json_new_string(tmp);
+			json_insert_pair_into_object(root, "data", str);
 
-		// {} end
-		// step2: 建立好的json_t对象树以及相关的依赖--> json文本;
-		char* json_text;
-		json_tree_to_string(root, &json_text); // 这个函数，来malloc json所需要的字符串的内存;
-		printf("%s\n", json_text);
-		
-            	for(session * it = client_list; it != NULL; it = it->next)
-	    	{
-                	if(it->is_shake_hand == 1)
-                	{		
-			        ws_send_data(it->fd, json_text, strlen(json_text));
-                	}
-	     	}
-		free(json_text);
-        }    	
-   }
+			// {} end
+			// step2: 建立好的json_t对象树以及相关的依赖--> json文本;
+			char* json_text;
+			json_tree_to_string(root, &json_text); // 这个函数，来malloc json所需要的字符串的内存;
+			printf("%s\n", json_text);
+
+			for(session * it = client_list; it != NULL; it = it->next)
+			{
+				if(it->is_shake_hand == 1)
+				{		
+					ws_send_data(it->fd, json_text, strlen(json_text));
+				}
+			}
+			free(json_text);
+		}		
+	}
 }
 
 static void handle_ws(session *s){
@@ -348,7 +354,7 @@ static void handle_ws(session *s){
 		json_insert_pair_into_object(root, "data", str);	
 		json_tree_to_string(root, &json_text); // 这个函数，来malloc json所需要的字符串的内存;
 		printf("%s\n", json_text);
-        for(session * it = client_list; it!=NULL; it = it->next)
+		for(session * it = client_list; it!=NULL; it = it->next)
 		{
 			if(it->fd != s->fd && it->is_shake_hand == 1)
 			{
@@ -368,8 +374,8 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	/*
 	判断是否是最后一个包
 	第一个字节  [0,7]，第一位是FIN，1000 ，文本类型0001/ 二进制类型0002
-	1000 0001B  0x81H  
-	1000 0010B  0x82H
+	1000 0001B	0x81H  
+	1000 0010B	0x82H
 	*/
 	if (data[0] != 0xffffff81 && data[0] != 0xffffff82) {
 		printf("data[0] != 0xffffff81 && data[0] != 0xffffff82\n");
@@ -381,7 +387,7 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	int head_size = 2;
 	printf("flag_mask %u, ws data_len: %u\n",flag_mask,data_len);
 
-    	// 后面两个字节表示的是数据长度;data[2](存储高位), data[3],最大65535
+	// 后面两个字节表示的是数据长度;data[2](存储高位), data[3],最大65535
 	if (data_len == 126) { 
 		//data_len = data[3] | (data[2] << 8);
 		data_len = data[2]*256 + data[3];
@@ -393,7 +399,7 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	else if (data_len == 127) { 
 		//unsigned int low = data[5] | (data[4] << 8) | (data[3] << 16) | (data[2] << 24);
 		//unsigned int hight = data[9] | (data[8] << 8) | (data[7] << 16) | (data[6] << 24);
-		//printf("127, low: %u  low: %u\n",low,hight);
+		//printf("127, low: %u	low: %u\n",low,hight);
 		//data_len = low;
 		//head_size += 8;
 		return;
@@ -422,11 +428,30 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	test_buf[data_len] = '\0';
 	printf("recv ws_data:%s\n", test_buf);
 
+	json_t*root = NULL;
+	// step3,将这个json_t文本专成我们对应的json对象;
+	json_parse_document(&root, test_buf); // 根据json文本产生一颗新的json对象树,
+	json_t*key = json_find_first_label(root, "name");
+	if (key) {
+		json_t* value = key->child;
+		switch (value->type) {
+		case JSON_STRING:
+			if (s->is_name == 0)
+			{
+				strcpy(s->user_name,value->text);
+				s->is_name = 1;
+			}
+			printf("key: %s value: %s\n", key->text, value->text);
+			break;
+		}
+	}
+	json_free_value(&root);
+
 	memset(LOGBUF,0,sizeof(LOGBUF));
 	sprintf(LOGBUF,"%s :%s\n",s->addr,test_buf);
 	save_log(LOGBUF);
 
-    	//群发聊天室
+	//群发聊天室
 	for(session * it = client_list;it!=NULL;it = it->next)
 	{
 		if(it->fd != fd && it->is_shake_hand == 1)
@@ -497,12 +522,12 @@ int make_http_content(const char *command, char **content)
 	sprintf(headbuf, HEAD, get_filetype(command), file_length); //设置消息头
 
 	int iheadlen = strlen(headbuf); //得到消息头长度
-    	(*content) = (char*)malloc(file_length + iheadlen);
-	
+	(*content) = (char*)malloc(file_length + iheadlen);
+
 	memcpy( *content, headbuf, iheadlen);				  //安装消息头
 	memcpy( *content + iheadlen, file_buf, file_length);//安装消息体
 
-    	free(file_buf);
+	free(file_buf);
 	return iheadlen + file_length; //返回消息总长度
 }
 
@@ -512,8 +537,8 @@ int make_http_content(const char *command, char **content)
 void save_log(char *buf)
 {
 	FILE *fp = fopen("log.txt","a+");  
-	fputs(buf,fp);  
-	fclose(fp);  
+	fputs(buf,fp);	
+	fclose(fp);	 
 }
 
 const char *get_filetype(const char *filename) //根据扩展名返回文件类型描述
@@ -596,7 +621,7 @@ const char *get_filetype(const char *filename) //根据扩展名返回文件类�
 
 int get_file_content(const char *file_name, char **content) // 得到文件内容
 {
-	int  file_length = 0;
+	int	 file_length = 0;
 	FILE *fp = NULL;
 
 	if (file_name == NULL)
@@ -671,35 +696,35 @@ static int tcp_socket(int port){
 }
 void daemon_run()
 {  
-    int pid;  
-    signal(SIGCHLD, SIG_IGN);  
-    //1）在父进程中，fork返回新创建子进程的进程ID；  
-    //2）在子进程中，fork返回0；  
-    //3）如果出现错误，fork返回一个负值；  
-    pid = fork();  
-    if (pid < 0)  
-    {  
-        //std:: cout << "fork error" << std::endl;  
+	int pid;  
+	signal(SIGCHLD, SIG_IGN);  
+	//1）在父进程中，fork返回新创建子进程的进程ID；  
+	//2）在子进程中，fork返回0；	
+	//3）如果出现错误，fork返回一个负值；	
+	pid = fork();  
+	if (pid < 0)  
+	{  
+		//std:: cout << "fork error" << std::endl;	
 		printf("fork error\n");
-        exit(-1);  
-    }  
-    //父进程退出，子进程独立运行  
-    else if (pid > 0) {  
-        exit(0);  
-    }  
-    //之前parent和child运行在同一个session里,parent是会话（session）的领头进程,  
-    //parent进程作为会话的领头进程，如果exit结束执行的话，那么子进程会成为孤儿进程，并被init收养。  
-    //执行setsid()之后,child将重新获得一个新的会话(session)id。  
-    //这时parent退出之后,将不会影响到child了。  
-    setsid();  
-    int fd;  
-    fd = open("/dev/null", O_RDWR, 0);  
-    if (fd != -1)  
-    {  
-        dup2(fd, STDIN_FILENO);  
-        dup2(fd, STDOUT_FILENO);  
-        dup2(fd, STDERR_FILENO);  
-    }  
-    if (fd > 2)  
-        close(fd);  
+		exit(-1);  
+	}  
+	//父进程退出，子进程独立运行	 
+	else if (pid > 0) {	 
+		exit(0);  
+	}  
+	//之前parent和child运行在同一个session里,parent是会话（session）的领头进程,	 
+	//parent进程作为会话的领头进程，如果exit结束执行的话，那么子进程会成为孤儿进程，并被init收养。	 
+	//执行setsid()之后,child将重新获得一个新的会话(session)id。	 
+	//这时parent退出之后,将不会影响到child了。  
+	setsid();  
+	int fd;	 
+	fd = open("/dev/null", O_RDWR, 0);	
+	if (fd != -1)  
+	{  
+		dup2(fd, STDIN_FILENO);	 
+		dup2(fd, STDOUT_FILENO);  
+		dup2(fd, STDERR_FILENO);  
+	}  
+	if (fd > 2)	 
+		close(fd);	
 }  
