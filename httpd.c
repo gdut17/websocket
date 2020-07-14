@@ -97,7 +97,7 @@ int main(int argc,char *argv[])
 	//signal(SIGINT, SIG_IGN);
 	signal(SIGHUP, SIG_IGN);
 
-    http_parser_init(&parser, HTTP_REQUEST);
+    	http_parser_init(&parser, HTTP_REQUEST);
 	int port = atoi(argv[1]);
 	int lfd = tcp_socket(port);
 	assert(lfd > 0);
@@ -194,21 +194,22 @@ void handle_recv(session *s,int efd){
 				printf("%x %d strlen() < 50\n",s->data[0],fd);
 				return;
 			}
-            printf("client %d %s http req\n",fd,s->addr);
+            		printf("client %d %s http req\n",fd,s->addr);
 			printf("%s\n",s->data);
 
-            //解析出GET 内容
+            		//解析出GET 内容
 			http_parser_execute(&parser, &settings, s->data, strlen(s->data));
-            //printf("GET:%s\n",url_buf);
-            char *content = NULL;
+            		//printf("GET:%s\n",url_buf);
+            		char *content = NULL;
 			int ilen = make_http_content(url_buf, &content); //根据用户在GET中的请求，生成相应的回复内容
 			if (ilen > 0)
 			{
 				//printf("%s\n",content);
 				send(fd, content, ilen, 0); //将回复的内容发送给client端socket
-                free(content);
+                		free(content);
 			}
-			else{
+			else
+			{
 				printf("null content\n");
 			}
 		}
@@ -218,19 +219,19 @@ void handle_recv(session *s,int efd){
 		epoll_ctl(efd,EPOLL_CTL_DEL,fd,NULL); 
 		close(fd);
 
-        memset(LOGBUF,0,sizeof(LOGBUF));
+        	memset(LOGBUF,0,sizeof(LOGBUF));
 		sprintf(LOGBUF,"%s close\n",s->addr);
 		save_log(LOGBUF);
 
-        int flag = s->is_shake_hand;
+        	int flag = s->is_shake_hand;
 
-        if(client_list->fd == fd)
+        	if(client_list->fd == fd)
 		{
 			session* p = client_list;
-            printf("closed client fd:%d %s\n",fd,p->addr);
+            		printf("closed client fd:%d %s\n",fd,p->addr);
 
 			client_list = p->next;
-            free(p->data);
+            		free(p->data);
 			free(p);
 		}
 		else
@@ -240,10 +241,10 @@ void handle_recv(session *s,int efd){
 				if(it->next->fd == fd)
 				{
 					session* p = it->next;
-                    printf("closed client fd:%d %s\n",fd,p->addr);
+                    			printf("closed client fd:%d %s\n",fd,p->addr);
 					it->next = p->next;
 					free(p->data);
-			        free(p);
+			        	free(p);
 					break;
 				}
 			}
@@ -251,16 +252,31 @@ void handle_recv(session *s,int efd){
         //加入了聊天室的人退出了才能广播
         if(flag == 1)
         {
-            for(session * it = client_list; it != NULL; it = it->next)
-		    {
-                if(it->is_shake_hand == 1)
-                {
-                    sprintf(tmp,"client %d 离开了群聊",fd);
-			        ws_send_data(it->fd, tmp, strlen(tmp));
-                }
-		    }
+		sprintf(tmp,"client %d 离开了群聊",fd);
+		
+		json_t* root = json_new_object(); // {}
+		json_t* number = json_new_number("101"); // 
+		json_insert_pair_into_object(root, "msg_id", number); // {uid: 123,}
+
+		json_t* str = json_new_string(tmp);
+		json_insert_pair_into_object(root, "data", str);
+
+		// {} end
+		// step2: 建立好的json_t对象树以及相关的依赖--> json文本;
+		char* json_text;
+		json_tree_to_string(root, &json_text); // 这个函数，来malloc json所需要的字符串的内存;
+		printf("%s\n", json_text);
+		
+            	for(session * it = client_list; it != NULL; it = it->next)
+	    	{
+                	if(it->is_shake_hand == 1)
+                	{		
+			        ws_send_data(it->fd, json_text, strlen(json_text));
+                	}
+	     	}
+		free(json_text);
         }    	
-	}
+   }
 }
 
 static void handle_ws(session *s){
@@ -365,7 +381,7 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	int head_size = 2;
 	printf("flag_mask %u, ws data_len: %u\n",flag_mask,data_len);
 
-    // 后面两个字节表示的是数据长度;data[2](存储高位), data[3],最大65535
+    	// 后面两个字节表示的是数据长度;data[2](存储高位), data[3],最大65535
 	if (data_len == 126) { 
 		//data_len = data[3] | (data[2] << 8);
 		data_len = data[2]*256 + data[3];
@@ -410,7 +426,7 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	sprintf(LOGBUF,"%s :%s\n",s->addr,test_buf);
 	save_log(LOGBUF);
 
-    //群发聊天室
+    	//群发聊天室
 	for(session * it = client_list;it!=NULL;it = it->next)
 	{
 		if(it->fd != fd && it->is_shake_hand == 1)
@@ -481,12 +497,12 @@ int make_http_content(const char *command, char **content)
 	sprintf(headbuf, HEAD, get_filetype(command), file_length); //设置消息头
 
 	int iheadlen = strlen(headbuf); //得到消息头长度
-    (*content) = (char*)malloc(file_length + iheadlen);
+    	(*content) = (char*)malloc(file_length + iheadlen);
 	
 	memcpy( *content, headbuf, iheadlen);				  //安装消息头
 	memcpy( *content + iheadlen, file_buf, file_length);//安装消息体
 
-    free(file_buf);
+    	free(file_buf);
 	return iheadlen + file_length; //返回消息总长度
 }
 
