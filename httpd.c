@@ -1,5 +1,24 @@
+/*
+server >> client
+101 server info
+203 chat msg
+103 login ok
+104 login error
+105 register ok
+106 register error
+
+
+client >> server
+201 register
+202 login
+203 chat
+
+
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -19,6 +38,8 @@
 #include "./crypto/sha1.h"
 #include "./crypto/base64_encoder.h"
 #include "./http_parser/http_parser.h"
+#include "redis_driver.h"
+
 
 const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -39,10 +60,11 @@ const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 typedef struct session {
 	int				fd;	
 	char			user_name[64];	
-	int				is_name;
+	//int				is_name;
+	char			user_password[64];
 	char			addr[64];
 	int				is_shake_hand;	// 是否是websocket连接,是否已经握手
-	char			*data;		// 读取数据的buf
+	char			*data;		//buf
 	uint8_t			sha1_data[256];
 	int				sha1_size;
 
@@ -53,35 +75,47 @@ typedef struct session {
 session * client_list = NULL;
 session * tail = NULL;
 
-static char url_buf[16];//保存GET 内容
+//redis 
+static redisContext* c = NULL;
 
+static char url_buf[64];//保存GET 内容
 static int on_url(http_parser*p, const char *at, size_t length) {
+	if(length > sizeof(url_buf)){
+		url_buf[0] = '\0';
+		return 0;
+	}
 	strncpy(url_buf, at, length);
 	url_buf[length] = '\0';
 	return 0;
 }
-
 static http_parser_settings settings = {
 	.on_url = on_url,
 };
 static http_parser parser;
 
+
 char LOGBUF[1024];
 void save_log(char *buf);
 
-
+//http 
 const char *get_filetype(const char *filename); //根据扩展名返回文件类型描述
 int get_file_content(const char *file_name, char **content);
 int make_http_content(const char *command, char **content);
 
-
+//socket epoll
 static int tcp_socket(int port);
 static int sp_add(int efd, int sock, void *ud);
 
 //处理websocket
 static void handle_ws(session *s);
-static void ws_send_data(int fd,char* data, int len);
+static void ws_send_data(int fd,const char* data, int len);
 static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len);
+
+//消息处理函数
+void handle_register(session *s);
+void handle_login(session *s);
+void handle_chat(session *s,const char *data,int sz);
+
 
 void handle_accept(int lfd,int efd);
 void handle_recv(session *s,int efd);
@@ -111,7 +145,9 @@ int main(int argc,char *argv[])
 
 	struct epoll_event event[1024];
 	printf("server listen on %s:%d\n",IP,port);
-
+	
+	c =  get_connect();
+	
 	//epoll 同步io 阻塞
 	for(;;)
 	{	
@@ -149,7 +185,7 @@ void handle_accept(int lfd,int efd)
 	ns->is_shake_hand = 0;
 	ns->fd = cfd;
 	ns->data = (char*)malloc(SIZE);
-	ns->is_name = 0;
+	//ns->is_name = 0;
 	ns->next = NULL;
 	memset(ns->user_name,0,sizeof(ns->user_name));
 	sprintf(ns->addr,"%s:%d",inet_ntoa(cli_addr.sin_addr),ntohs(cli_addr.sin_port));
@@ -182,7 +218,7 @@ void handle_recv(session *s,int efd){
 	if(ret > 0)
 	{	
 		s->data[ret] = '\0';
-		printf("recv from:%d ,msg_len = %d\n",fd,ret);
+		//printf("recv from:%d ,msg_len = %d\n",fd,ret);
 
 		if(strstr(s->data,"websocket") || s->data[0] == 0xffffff81 || s->data[0] == 0xffffff82)
 		{
@@ -195,7 +231,7 @@ void handle_recv(session *s,int efd){
 			//http请求包不止50
 			if(strlen(s->data) < 50)//websocket有时候出现一些不正常包
 			{
-				printf("%x %d strlen() < 50\n",s->data[0],fd);
+				//printf("%x %d strlen() < 50\n",s->data[0],fd);
 				return;
 			}
 			printf("client %d %s http req\n",fd,s->addr);
@@ -203,7 +239,7 @@ void handle_recv(session *s,int efd){
 
 			//解析出GET 内容
 			http_parser_execute(&parser, &settings, s->data, strlen(s->data));
-			//printf("GET:%s\n",url_buf);
+			printf("GET:%s\n",url_buf);
 			char *content = NULL;
 			int ilen = make_http_content(url_buf, &content); //根据用户在GET中的请求，生成相应的回复内容
 			if (ilen > 0)
@@ -345,23 +381,7 @@ static void handle_ws(session *s){
 		ws_send_data(s->fd, json_text, strlen(json_text));
 		free(json_text); 
 
-		//群发
-		sprintf(tmp,"client %d 加入了群聊", s->fd);
-		root = json_new_object(); // {}
-		number = json_new_number("101"); // 
-		json_insert_pair_into_object(root, "msg_id", number); // {uid: 123,}
-		str = json_new_string(tmp);
-		json_insert_pair_into_object(root, "data", str);	
-		json_tree_to_string(root, &json_text); // 这个函数，来malloc json所需要的字符串的内存;
-		printf("%s\n", json_text);
-		for(session * it = client_list; it!=NULL; it = it->next)
-		{
-			if(it->fd != s->fd && it->is_shake_hand == 1)
-			{
-				ws_send_data(it->fd,json_text, strlen(json_text));
-			}
-		}
-		free(json_text);
+		
 	}
 	else{
 		ws_on_recv_data(s,s->fd,s->data,strlen(s->data));
@@ -431,41 +451,107 @@ static void ws_on_recv_data(session *s,int fd,char* data, unsigned int len) {
 	json_t*root = NULL;
 	// step3,将这个json_t文本专成我们对应的json对象;
 	json_parse_document(&root, test_buf); // 根据json文本产生一颗新的json对象树,
-	json_t*key = json_find_first_label(root, "name");
+	
+	json_t*key = json_find_first_label(root, "msg_id");
 	if (key) {
 		json_t* value = key->child;
 		switch (value->type) {
-		case JSON_STRING:
-			if (s->is_name == 0)
+			case JSON_NUMBER:
 			{
-				strcpy(s->user_name,value->text);
-				s->is_name = 1;
+				int msg_id = atoi(value->text);
+				if(msg_id == 201){
+					key = json_find_first_label(root, "name");
+					value = key->child;
+					strcpy(s->user_name,value->text);
+					
+					key = json_find_first_label(root, "password");
+					value = key->child;
+					strcpy(s->user_password,value->text);
+					
+					handle_register(s);
+					
+				}else if(msg_id == 202){
+					
+					key = json_find_first_label(root, "name");
+					value = key->child;
+					strcpy(s->user_name,value->text);
+					
+					key = json_find_first_label(root, "password");
+					value = key->child;
+					strcpy(s->user_password,value->text);
+					
+					handle_login(s);
+					
+				}else if(msg_id == 203){
+					handle_chat(s,test_buf,strlen(test_buf));
+				}
 			}
-			printf("key: %s value: %s\n", key->text, value->text);
-			break;
 		}
 	}
+
 	json_free_value(&root);
 
 	memset(LOGBUF,0,sizeof(LOGBUF));
 	sprintf(LOGBUF,"%s :%s\n",s->addr,test_buf);
 	save_log(LOGBUF);
+}
+
+void handle_register(session *s){
+	char buf[64] = {0};
+	if(Register(c, s->user_name,s->user_password)){
+		sprintf(buf,"{\"msg_id\":%d}",105);
+	}
+	else{
+		sprintf(buf,"{\"msg_id\":%d}",106);
+	}
+	ws_send_data(s->fd, buf, strlen(buf));
+}
+
+void handle_login(session *s){
+	char buf[64] = {0};
+	if(Login(c, s->user_name,s->user_password)){
+		sprintf(buf,"{\"msg_id\":%d}",103);
+
+		//群发
+		char tmp[64];
+		sprintf(tmp,"%s 加入了群聊", s->user_name);
+		json_t *root = json_new_object(); // {}
+		json_t*number = json_new_number("101"); // 
+		json_insert_pair_into_object(root, "msg_id", number); // {uid: 123,}
+		json_t*str = json_new_string(tmp);
+		json_insert_pair_into_object(root, "data", str);	
+		char* json_text;
+		json_tree_to_string(root, &json_text); // 这个函数，来malloc json所需要的字符串的内存;
+		printf("%s\n", json_text);
+		for(session * it = client_list; it!=NULL; it = it->next)
+		{
+			if(it->fd != s->fd && it->is_shake_hand == 1)
+			{
+				ws_send_data(it->fd,json_text, strlen(json_text));
+			}
+		}
+		free(json_text);
+	}
+	else{
+		sprintf(buf,"{\"msg_id\":%d}",104);
+	}
+	ws_send_data(s->fd, buf, strlen(buf));
+}
+
+void handle_chat(session *s,const char *data,int sz){
 
 	//群发聊天室
 	for(session * it = client_list;it!=NULL;it = it->next)
 	{
-		if(it->fd != fd && it->is_shake_hand == 1)
+		if(it->fd != s->fd && it->is_shake_hand == 1)
 		{	
 			printf("广播给 %d\n",it->fd);
-			//char tmp[1024];
-			//sprintf(tmp,"client %d : %s",s->fd, test_buf);
-			//ws_send_data(it->fd,tmp,strlen(tmp));
-			ws_send_data(it->fd,test_buf,strlen(test_buf));
+			ws_send_data(it->fd,data,sz);
 		}
 	}
 }
 
-static void ws_send_data(int fd,char* data, int len) {
+static void ws_send_data(int fd,const char* data, int len) {
 	int head_size = 2;
 	//126
 	if (len > 125 && len < 65536) { // 两个字节[0, 65535]
@@ -498,9 +584,15 @@ static void ws_send_data(int fd,char* data, int len) {
 }
 
 
+
+
+
 //根据用户在GET中的请求，生成相应的回复内容
 int make_http_content(const char *command, char **content)
 {
+	if(command[0] == '\0'){
+		return 0;
+	}
 	char *file_buf;
 	int file_length;
 	char headbuf[256];
@@ -530,8 +622,6 @@ int make_http_content(const char *command, char **content)
 	free(file_buf);
 	return iheadlen + file_length; //返回消息总长度
 }
-
-
 
 
 void save_log(char *buf)

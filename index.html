@@ -2,13 +2,13 @@
 <head>
     <script>
         let ws = null;
-
+		let is_login = false;
         function doConnect(addr) {
             if(ws == null){
                 ws = new WebSocket("ws://" + addr);
             }
             else{
-                alert("you are already in chatroom");
+                alert("you are already connect server");
             }
             ws.onopen = () => {
                 document.getElementById("log").value += ("Connection opened\n");
@@ -18,12 +18,25 @@
                 if(info.msg_id == 101){
                     document.getElementById("log").value += ("server:" + info.data + "\n");
                 }
-                else if(info.msg_id == 102){
+                else if(info.msg_id == 203){
                     document.getElementById("log").value += (info.name + ":" + info.data + "\n");
                 }
-                
+				else if(info.msg_id == 103){
+                    alert("login ok");
+					is_login = true;
+                }
+				else if(info.msg_id == 104){
+                    alert("login error");
+                }
+				else if(info.msg_id == 105){
+                    alert("register ok");
+                }
+                else if(info.msg_id == 106){
+                    alert("register error");
+                }
             };
             ws.onclose = () => {
+				is_login = false;
                 document.getElementById("log").value += ("Connection closed\n");
             };
         }
@@ -35,20 +48,77 @@
             };
 
             document.getElementById("btn_send").onclick = () => {
-                let msg = document.getElementById("message").value;
+                if(ws == null){
+					alert("please connect ws server!");
+                    return;
+				}
+				if(is_login == false){
+					alert("you are login error");
+                    return;
+				}
+				
+				let msg = document.getElementById("message").value;
                 let user_name = document.getElementById("name").value;
-
+				let user_password = document.getElementById("password").value;
                 if(user_name == ''){
                     alert("please input name!");
                     return;
                 }
-                var messageObj = {'msg_id':102,'name':user_name,'data':msg};
+				if(user_password == ''){
+                    alert("please input password!");
+                    return;
+                }
+                var messageObj = {'msg_id':203,'name':user_name,'data':msg};
                 var messageJson = JSON.stringify(messageObj);//转换为json字符串
         
                 ws.send(messageJson);
   
                 document.getElementById("log").value += ("Send: " + msg + "\n");
             };
+			document.getElementById("btn_register").onclick = () => {
+				//let msg = document.getElementById("message").value;
+                let user_name = document.getElementById("name").value;
+				let user_password = document.getElementById("password").value;
+                
+				if(user_name == ''){
+                    alert("please input name!");
+                    return;
+                }
+				if(user_password == ''){
+                    alert("please input password!");
+                    return;
+                }
+				if(ws == null){
+					alert("please connect ws server!");
+                    return;
+				}
+				var messageObj = {'msg_id':201,'name':user_name,'password':user_password};
+                var messageJson = JSON.stringify(messageObj);//转换为json字符串
+        
+                ws.send(messageJson);
+			};
+			document.getElementById("btn_login").onclick = () => {
+				//let msg = document.getElementById("message").value;
+                let user_name = document.getElementById("name").value;
+				let user_password = document.getElementById("password").value;
+                
+				if(user_name == ''){
+                    alert("please input name!");
+                    return;
+                }
+				if(user_password == ''){
+                    alert("please input password!");
+                    return;
+                }
+				if(ws == null){
+					alert("please connect ws server!");
+                    return;
+				}
+				var messageObj = {'msg_id':202,'name':user_name,'password':user_password};
+                var messageJson = JSON.stringify(messageObj);//转换为json字符串
+        
+                ws.send(messageJson);
+			};
         });
     </script>
 </head>
@@ -56,11 +126,15 @@
 
 <div id="header">
     <h1 align="left">WebSocket Client</h1>
-    Server: <input id="server_addr" type="text" value="106.13.232.15:9998">
+    WS Server: <input id="server_addr" type="text" value="106.13.232.15:9998">
     <input id="btn_connect" type="button" value="Connect!"><br/><br/>
     
     Name: <input id="name" type="text" value=""><br/><br/>
-    
+    Password: <input id="password" type="text" value="">
+
+	<input id="btn_register" type="button" value="Register">
+	<input id="btn_login" type="button" value="Login"><br/><br/>
+	
     Message: <input id="message" type="text" value="">
     <input id="btn_send" type="button" value="Send"><br/><br/>
 

@@ -1,0 +1,45 @@
+new client fd = 6 from 120.239.196.78:1532
+new client fd = 7 from 120.239.196.78:1593
+new client fd = 8 from 120.239.196.78:1652
+new client fd = 9 from 120.239.196.78:1559
+file name: /favicon.ico,httpd.c,719:open file failture No such file or directory 
+new client fd = 10 from 120.239.196.78:5759
+client 10 websocket握手成功
+120.239.196.78:5759 :{"msg_id":202,"name":"james","password":"454"}
+120.239.196.78:5759 :{"msg_id":203,"name":"james","data":"hhh"}
+120.239.196.78:5759 close
+new client fd = 10 from 120.239.196.78:5734
+new client fd = 12 from 120.239.196.78:5750
+client 12 websocket握手成功
+120.239.196.78:5750 :{"msg_id":201,"name":"james","password":"111"}
+120.239.196.78:5750 :{"msg_id":202,"name":"james","password":"111"}
+120.239.196.78:5750 :{"msg_id":201,"name":"james","password":"111"}
+120.239.196.78:5750 :{"msg_id":202,"name":"james","password":"111"}
+120.239.196.78:5750 :{"msg_id":201,"name":"wu","password":"111"}
+120.239.196.78:5750 :{"msg_id":202,"name":"wu","password":"111"}
+new client fd = 16 from 120.239.196.78:5751
+new client fd = 17 from 120.239.196.78:5685
+client 17 websocket握手成功
+120.239.196.78:5750 :{"msg_id":203,"name":"wu","data":"www"}
+120.239.196.78:5685 :{"msg_id":202,"name":"james","password":"454"}
+120.239.196.78:5685 :{"msg_id":203,"name":"james","data":"jam"}
+new client fd = 6 from 120.239.196.78:5690
+new client fd = 7 from 120.239.196.78:5685
+new client fd = 8 from 120.239.196.78:5632
+client 8 websocket握手成功
+120.239.196.78:5632 :{"msg_id":202,"name":"wu","password":"111"}
+new client fd = 10 from 120.239.196.78:5761
+client 10 websocket握手成功
+120.239.196.78:5761 :{"msg_id":202,"name":"james","password":"454"}
+120.239.196.78:5761 :{"msg_id":203,"name":"james","data":"jjj"}
+120.239.196.78:5632 :{"msg_id":203,"name":"wu","data":"kkk"}
+new client fd = 6 from 120.239.196.78:5713
+new client fd = 7 from 120.239.196.78:5623
+client 7 websocket握手成功
+120.239.196.78:5623 :{"msg_id":202,"name":"wu","password":"111"}
+new client fd = 9 from 120.239.196.78:5699
+new client fd = 10 from 120.239.196.78:5697
+client 10 websocket握手成功
+120.239.196.78:5697 :{"msg_id":202,"name":"james","password":"454"}
+120.239.196.78:5623 :{"msg_id":203,"name":"wu","data":"hhh"}
+120.239.196.78:5697 :{"msg_id":203,"name":"james","data":"khl"}
