@@ -1,0 +1,1 @@
+gcc -std=gnu99 -o test websocket.c test.c ../crypto/sha1.c ../crypto/base64_encoder.c 

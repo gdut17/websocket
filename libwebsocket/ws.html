@@ -1,0 +1,65 @@
+<html>
+<head>
+    <script>
+        let ws = null;
+        function doConnect(addr) {
+            if(ws == null){
+                ws = new WebSocket("ws://" + addr);
+            }
+            else{
+                alert("you are already connect server");
+            }
+            ws.onopen = () => {
+                document.getElementById("log").value += ("Connection opened\n");
+            };
+            ws.onmessage = (event) => {
+                var info = event.data;
+
+                document.getElementById("log").value += (info + "\n");
+
+            };
+            ws.onclose = () => {
+				is_login = false;
+                document.getElementById("log").value += ("Connection closed\n");
+            };
+        }
+
+        document.addEventListener("DOMContentLoaded", (event) => {
+            document.getElementById("btn_connect").onclick = () => {
+                let server_addr = document.getElementById("server_addr").value;
+                doConnect(server_addr);
+            };
+
+            document.getElementById("btn_send").onclick = () => {
+                if(ws == null){
+					alert("please connect ws server!");
+                    return;
+				}
+				if(is_login == false){
+					alert("you are login error");
+                    return;
+				}
+				
+				let msg = document.getElementById("message").value;
+                
+                ws.send(msg);
+  
+                document.getElementById("log").value += ("Send: " + msg + "\n");
+            };
+        });
+    </script>
+</head>
+<body>
+
+<div id="header">
+    <h1 align="left">WebSocket Client</h1>
+    WS Server: <input id="server_addr" type="text" value="192.168.150.3:8888">
+    <input id="btn_connect" type="button" value="Connect!"><br/><br/>
+    
+    Message: <input id="message" type="text" value="">
+    <input id="btn_send" type="button" value="Send"><br/><br/>
+
+    <textarea cols="250" id="log" rows="50"></textarea>
+</div>
+</body>
+</html>
